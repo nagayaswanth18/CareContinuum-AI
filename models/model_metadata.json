@@ -1,0 +1,48 @@
+{
+    "feature_columns": [
+        "race",
+        "gender",
+        "age",
+        "admission_type_id",
+        "admission_source_id",
+        "time_in_hospital",
+        "medical_specialty",
+        "num_lab_procedures",
+        "num_procedures",
+        "num_medications",
+        "number_outpatient",
+        "number_emergency",
+        "number_inpatient",
+        "diag_1",
+        "diag_2",
+        "diag_3",
+        "number_diagnoses",
+        "max_glu_serum",
+        "A1Cresult",
+        "insulin",
+        "change",
+        "diabetesMed"
+    ],
+    "categorical_features": [
+        "race",
+        "gender",
+        "age",
+        "medical_specialty",
+        "diag_1",
+        "diag_2",
+        "diag_3",
+        "max_glu_serum",
+        "A1Cresult",
+        "insulin",
+        "change",
+        "diabetesMed",
+        "admission_type_id",
+        "admission_source_id"
+    ],
+    "target": "readmission_binary",
+    "class_mapping": {
+        "0": "Not Readmitted",
+        "1": "Readmitted"
+    },
+    "prediction_threshold": 0.5
+}

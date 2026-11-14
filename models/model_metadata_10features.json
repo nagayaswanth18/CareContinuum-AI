@@ -1,0 +1,34 @@
+{
+    "model_name": "CareContinuum AI - Compact Model",
+    "model_type": "CatBoostClassifier",
+    "feature_columns": [
+        "number_inpatient",
+        "diag_1",
+        "admission_source_id",
+        "diag_2",
+        "number_diagnoses",
+        "medical_specialty",
+        "admission_type_id",
+        "num_medications",
+        "number_emergency",
+        "age"
+    ],
+    "categorical_features": [
+        "diag_1",
+        "admission_source_id",
+        "diag_2",
+        "medical_specialty",
+        "admission_type_id",
+        "age"
+    ],
+    "target": "readmission_binary",
+    "class_mapping": {
+        "0": "Not Readmitted",
+        "1": "Readmitted"
+    },
+    "prediction_threshold": 0.5,
+    "iterations": 484,
+    "depth": 6,
+    "learning_rate": 0.05,
+    "l2_leaf_reg": 5
+}
