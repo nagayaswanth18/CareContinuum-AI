@@ -1,120 +1,239 @@
-# CareContinuum AI — Model Development Decision Record
+# CareContinuum AI — Model Development Record
 
-**Purpose:** Document why the project moved from a 42-feature model to a 22-feature model and then investigated a 10-feature compact model.
+## 1. Purpose
 
-**Status:** The 22-feature model has completed held-out test evaluation. The tuned 10-feature model has validation results; its final held-out test evaluation is still pending. Therefore, this record does not claim that the 10-feature model is better.
+This document records the experimentation and modelling decisions made during the development of CareContinuum AI. It covers the initial three-class experiments, the transition to a binary readmission target, patient-grouped data splitting, CatBoost feature reduction, hyperparameter tuning, and final model selection.
 
-## 1. Project and data preparation
+The project is an educational prototype and is not clinically validated.
 
-The project uses the UCI Diabetes 130-US Hospitals dataset (1999–2008) to build an educational prototype that estimates whether a hospital encounter will be followed by readmission.
+## 2. Dataset and initial preparation
 
-Binary target:
-- `NO` → 0 (Not Readmitted)
-- `>30` and `<30` → 1 (Readmitted)
+Dataset: *Diabetes 130-US Hospitals for Years 1999–2008* from the UCI Machine Learning Repository.
 
-This target represents any recorded readmission category, not specifically readmission within 30 days.
-
-Data preparation:
-- Excluded discharge disposition IDs `[11, 13, 14, 19, 20]`.
-- Dropped `weight`, `citoglipton`, and `examide`.
-- Replaced missing categorical values with `Unknown`.
+- Original dataset: 101,766 encounters and 50 columns.
+- Excluded discharge disposition IDs: `[11, 13, 14, 19, 20]`.
+- Removed `weight`, `citoglipton`, and `examide`.
+- Replaced `?` with missing values; missing categorical values were filled with `Unknown`.
 - Cleaned modelling dataset: 99,343 encounters and 48 columns.
-- Model feature matrix: 42 features.
-- Kept patient identifiers separately for grouped splitting, not as model inputs.
-- Patient-grouped train/test split: 79,541 training encounters and 19,802 held-out test encounters.
-- No patient appeared in both train and test sets.
-- A patient-grouped validation split was made from the training partition for model selection.
 
-Grouping by patient helps reduce leakage from repeated encounters belonging to the same patient.
+The first notebook investigated the original three-category target (`NO`, `>30`, `<30`). The later CatBoost workflow combined `>30` and `<30` into a single readmitted class and treated `NO` as not readmitted.
 
-## 2. First model: 42 features
+**Target interpretation:** the final binary target represents any recorded readmission versus no recorded readmission. It does not specifically predict readmission within 30 days.
 
-CatBoost configuration:
-- Iterations: 700
-- Learning rate: 0.05
-- Depth: 6
-- Loss: Logloss
-- Evaluation metric: F1
-- Random seed: 42
-- Early stopping: 50 rounds
+## 3. Initial three-class experiments
+
+### 3.1 Cross-validation and evaluation approach
+
+The first notebook used five-fold patient-grouped cross-validation for the Logistic Regression comparisons. Accuracy and macro F1 were recorded. Macro F1 was important because it gives each class equal weight and helps expose poor minority-class performance.
+
+### 3.2 Dummy Classifier baseline
+
+The majority-class Dummy Classifier established a baseline:
+
+| Metric | Result |
+|---|---:|
+| Accuracy | 52.84% |
+| Macro F1 | 0.2305 |
+
+This provided a reference point for the trainable models.
+
+### 3.3 Logistic Regression
+
+Configuration visible in the notebook:
+
+```python
+LogisticRegression(
+    max_iter=1000,
+    random_state=42
+)
+```
+
+Five-fold cross-validation results:
+
+| Metric | Mean | Standard deviation |
+|---|---:|---:|
+| Accuracy | 57.35% | 0.0029 |
+| Macro F1 | 0.3914 | 0.0045 |
+
+The model improved over the majority baseline, but minority-class performance remained weak, particularly for the `<30` class.
+
+### 3.4 Class-weighted Logistic Regression
+
+Configuration:
+
+```python
+LogisticRegression(
+    max_iter=1000,
+    random_state=42,
+    class_weight="balanced"
+)
+```
+
+Results:
+
+| Metric | Standard Logistic Regression | Class-weighted Logistic Regression |
+|---|---:|---:|
+| Accuracy | 57.35% | 48.17% |
+| Macro F1 | 0.3914 | 0.4262 |
+
+Class weighting reduced accuracy but improved macro F1. The notebook's displayed class-level results showed the `<30` class recall increasing from approximately 0.02 to 0.40. This illustrated the trade-off between overall accuracy and minority-class detection.
+
+### 3.5 Random Forest exploration
+
+The initial Random Forest configuration shown in the notebook was:
+
+```python
+RandomForestClassifier(
+    n_estimators=200,
+    class_weight="balanced",
+    random_state=42,
+    n_jobs=1
+)
+```
+
+The full 200-tree run took a very long time and did not complete within the experiment. To explore the algorithm without waiting for the full run, a smaller experiment was conducted using a 10% subset and a reduced configuration.
+
+The exploratory validation result was:
+
+| Metric | Result |
+|---|---:|
+| Accuracy | 54.43% |
+| Macro F1 | 0.3591 |
+
+This was a reduced exploratory experiment, not a completed five-fold evaluation of the original 200-tree configuration. It should not be compared directly with the five-fold Logistic Regression averages.
+
+### 3.6 Lessons from the first notebook
+
+- A majority-class baseline is necessary to contextualize model performance.
+- Accuracy alone does not adequately represent performance across imbalanced classes.
+- Class weighting improved macro F1 and minority-class recall, at the cost of lower accuracy.
+- Random Forest required more computation than was practical for the initial full configuration.
+- These experiments motivated further modelling and evaluation in the subsequent binary CatBoost workflow.
+
+## 4. Binary target and modelling data
+
+The later workflow mapped the target:
+
+| Original `readmitted` value | `readmission_binary` |
+|---|---:|
+| `NO` | 0 |
+| `>30` | 1 |
+| `<30` | 1 |
+
+The final cleaned binary modelling dataset had 99,343 rows. The feature matrix had 42 features. `patient_nbr` was kept separately as the group label and not used as a model feature. Encounter identifiers and target-related columns were removed from the feature matrix.
+
+The binary target distribution shown in the notebook was approximately:
+
+- Class 0 (not readmitted): 52.9%
+- Class 1 (readmitted): 47.1%
+
+## 5. Patient-grouped splitting
+
+The workflow used patient identifiers for grouped splitting to prevent encounters from the same patient appearing in both training and test partitions.
+
+The final split used:
+- Training partition: 79,541 encounters
+- Held-out test partition: 19,802 encounters
+- No shared patients between train and test.
+
+A validation partition was created from the training data for model selection. The final held-out test set was reserved for final evaluation.
+
+## 6. CatBoost with 42 features
+
+The initial CatBoost model used the 42-feature matrix, including categorical features handled by CatBoost.
+
+Main configuration:
+
+```python
+CatBoostClassifier(
+    iterations=700,
+    learning_rate=0.05,
+    depth=6,
+    loss_function="Logloss",
+    eval_metric="F1",
+    random_seed=42,
+    early_stopping_rounds=50,
+    allow_writing_files=False
+)
+```
 
 Validation results:
-- Accuracy: **0.6409**
-- Readmitted-class F1: **0.5775**
-- Best iteration: 453
 
-Feature importance highlighted variables such as `number_inpatient`, diagnosis codes, admission source, number of diagnoses, medical specialty, admission type, number of medications, emergency visits, and age.
+| Metric | Result |
+|---|---:|
+| Accuracy | 0.6409 |
+| Readmitted-class F1 | 0.5775 |
+| Best iteration | 453 |
 
-**Interpretation:** This model established a performance baseline, but using all 42 features would make the user-facing prediction form lengthy.
+Feature importance from this model was used to help identify a smaller feature set for subsequent experiments.
 
-## 3. Second model: 22 features
+## 7. CatBoost with 22 features
 
-The next step removed the 20 individual medication columns while retaining the broader medication indicators `insulin`, `diabetesMed`, and `change`. This reduced the input count from 42 to 22.
+The project then removed 20 individual medication columns while retaining `insulin`, `diabetesMed`, and `change`.
 
-Validation comparison:
+Validation results:
 
-| Model | Features | Accuracy | Readmitted-class F1 |
-|---|---:|---:|---:|
-| Full model | 42 | 0.6409 | 0.5775 |
-| Reduced model | 22 | 0.6420 | 0.5760 |
+| Metric | Result |
+|---|---:|
+| Accuracy | 0.6420 |
+| Readmitted-class F1 | 0.5760 |
 
-The 22-feature model had marginally lower F1 but slightly higher accuracy, while requiring 20 fewer inputs. It was selected as a simpler candidate with nearly unchanged validation performance.
+Held-out test results:
 
-### Held-out test results for the 22-feature model
-
-- Accuracy: **0.6369** (63.69%)
-- Readmitted-class F1: **0.5846**
-- Readmitted-class precision: approximately **0.63**
-- Readmitted-class recall: approximately **0.54**
+| Metric | Result |
+|---|---:|
+| Accuracy | 0.6369 |
+| Readmitted-class precision | approximately 0.6321 |
+| Readmitted-class recall | approximately 0.5437 |
+| Readmitted-class F1 | 0.5846 |
 
 Confusion matrix (rows = actual class; columns = predicted class):
 
-| | Predicted Not Readmitted | Predicted Readmitted |
-|---|---:|---:|
-| Actual Not Readmitted | 7,552 | 2,944 |
-| Actual Readmitted | 4,247 | 5,059 |
+```text
+[[7552, 2944],
+ [4247, 5059]]
+```
 
-It correctly identified 5,059 readmitted encounters and missed 4,247. This is why recall matters alongside accuracy and F1.
+This model was saved as `carecontinuum_catboost.cbm`, with its associated metadata and category options.
 
-## 4. Why investigate a 10-feature model?
+## 8. Compact 10-feature model
 
-Although 22 features were fewer than 42, the Streamlit application still required users to enter 22 values. The goal was to investigate whether a compact model could make the application easier to use while retaining performance close to the 22-feature model.
+To simplify the application, a compact model was investigated using the following features:
 
-The 10 candidate features were selected from the leading feature-importance results of the 42-feature model. They were candidates to test, not features proven to be optimal:
+```python
+compact_features = [
+    "number_inpatient",
+    "diag_1",
+    "admission_source_id",
+    "diag_2",
+    "number_diagnoses",
+    "medical_specialty",
+    "admission_type_id",
+    "num_medications",
+    "number_emergency",
+    "age"
+]
+```
 
-1. `number_inpatient`
-2. `diag_1`
-3. `admission_source_id`
-4. `diag_2`
-5. `number_diagnoses`
-6. `medical_specialty`
-7. `admission_type_id`
-8. `num_medications`
-9. `number_emergency`
-10. `age`
+The 10-feature model contains six categorical and four numerical features.
 
-## 5. Initial 10-feature model
+Initial validation results:
 
-The initial 10-feature model used CatBoost with 700 maximum iterations, learning rate 0.05, depth 6, F1 evaluation, random seed 42, and early stopping after 50 rounds.
+| Metric | Result |
+|---|---:|
+| Accuracy | 0.6380 |
+| Readmitted-class F1 | 0.5695 |
 
-| Model | Features | Accuracy | Readmitted-class F1 |
-|---|---:|---:|---:|
-| 22-feature model | 22 | 0.6420 | 0.5760 |
-| Initial 10-feature model | 10 | 0.6380 | 0.5695 |
+## 9. Hyperparameter tuning of the 10-feature model
 
-The initial 10-feature model lost 0.0040 in accuracy and 0.0065 in F1 compared with the 22-feature model. The decrease was small, but it motivated further controlled tuning.
-
-## 6. Eight hyperparameter configurations for the 10-feature model
-
-The same training/validation split and the same 10 features were used. The following parameters were varied:
-
+Eight configurations were compared. The search varied:
 - Depth: 4 or 6
 - Learning rate: 0.03 or 0.05
 - L2 regularization: 3 or 5
 
-All runs used maximum iterations 700, Logloss, F1 evaluation, random seed 42, and early stopping after 50 rounds.
+Maximum iterations were 700, with Logloss, F1 evaluation, random seed 42, and early stopping after 50 rounds.
 
-| Model | Depth | Learning rate | L2 | Best iteration | Accuracy | F1 | Precision | Recall |
+| Model | Depth | Learning rate | L2 | Best iteration | Validation accuracy | Validation F1 | Precision | Recall |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 4 | 0.03 | 3 | 334 | 0.6368 | 0.5602 | 0.6264 | 0.5066 |
 | 2 | 4 | 0.03 | 5 | 4 | 0.6221 | 0.5209 | 0.6182 | 0.4501 |
@@ -125,127 +244,102 @@ All runs used maximum iterations 700, Logloss, F1 evaluation, random seed 42, an
 | 7 | 6 | 0.05 | 3 | 321 | 0.6380 | 0.5695 | 0.6229 | 0.5245 |
 | 8 | 6 | 0.05 | 5 | 484 | 0.6380 | **0.5727** | 0.6209 | 0.5315 |
 
-The eight experiments took approximately **400 seconds** in total.
+Configuration 8 was selected based on validation F1.
 
-### Best tuned configuration: Model 8
-
-- Depth: **6**
-- Learning rate: **0.05**
-- L2 regularization: **5**
-- Best iteration: **484**
-- Validation accuracy: **0.6380**
-- Validation F1: **0.5727**
-- Validation precision: **0.6209**
-- Validation recall: **0.5315**
-
-Tuning improved the 10-feature model's F1 from 0.5695 to 0.5727, an increase of 0.0032. Accuracy remained 0.6380.
-
-## 7. Overall validation comparison
-
-| Model | Features | Validation accuracy | Validation F1 |
-|---|---:|---:|---:|
-| Full model | 42 | 0.6409 | 0.5775 |
-| Reduced model | 22 | 0.6420 | 0.5760 |
-| Initial compact model | 10 | 0.6380 | 0.5695 |
-| Tuned compact model | 10 | 0.6380 | 0.5727 |
-
-## 8. Reason for changing the approach
-
-The progression was based on a practical trade-off between predictive performance and application usability:
-
-1. The 42-feature model established the initial performance baseline.
-2. The 22-feature model removed 20 inputs while retaining very similar validation performance.
-3. The Streamlit application still required 22 user inputs, so a more compact 10-feature alternative was investigated.
-4. The 10 features were selected as candidates based on the earlier feature-importance analysis.
-5. The initial 10-feature model was slightly weaker, so eight hyperparameter configurations were tested.
-6. Tuning improved the 10-feature model's F1, but its validation F1 (0.5727) remains slightly below the 22-feature model (0.5760).
-
-**Current conclusion:** The 10-feature model is a promising usability-oriented alternative, but it has not yet demonstrated better performance than the 22-feature model. The final choice should be made after evaluating the tuned 10-feature model on the same untouched test set and comparing it fairly with the already evaluated 22-feature model.
-
-## 9. Evaluation limitations and next step
-
-- Do not use the held-out test set for further tuning or feature selection.
-- The final held-out test evaluation of the tuned 10-feature model is pending.
-- The model is an educational prototype, not a clinically validated decision-support system.
-- The target combines `<30` and `>30`, so it predicts recorded readmission versus no recorded readmission, not specifically 30-day readmission.
-- Report precision and recall, especially for the readmitted class, alongside accuracy and F1.
-
-**Update this record with the final 10-feature test metrics and final model-selection decision after the held-out test evaluation.**
-
-
-## 10. Final held-out test evaluation of the tuned 10-feature model
-
-After selecting the best 10-feature hyperparameter configuration using the validation set, the final model was refitted on the full training partition (training + validation; 79,541 encounters) for 484 iterations. The held-out test set (19,802 encounters) was then used for final evaluation.
-
-Final configuration:
-- Features: the 10 listed in Section 4
-- Iterations: 484
+Selected configuration:
 - Depth: 6
 - Learning rate: 0.05
 - L2 regularization: 5
-- Random seed: 42
+- Best iteration: 484
 
-Final test metrics:
-- Accuracy: **0.6346** (63.46%)
-- Readmitted-class F1: **0.5836**
-- Readmitted-class precision: **0.6282**
-- Readmitted-class recall: **0.5449**
+Tuning increased validation F1 from 0.5695 to 0.5727.
+
+## 10. Final held-out test evaluation of the tuned 10-feature model
+
+After selecting the hyperparameters using validation data, the final model was refitted on the full training partition (79,541 encounters) for 484 iterations. It was then evaluated on the held-out test partition (19,802 encounters).
+
+| Metric | Test result |
+|---|---:|
+| Accuracy | 0.6346 |
+| Readmitted-class precision | 0.6282 |
+| Readmitted-class recall | 0.5449 |
+| Readmitted-class F1 | 0.5836 |
 
 Classification report:
 
 | Class | Precision | Recall | F1 | Support |
 |---|---:|---:|---:|---:|
-| Not Readmitted | 0.64 | 0.71 | 0.67 | 10,496 |
-| Readmitted | 0.63 | 0.54 | 0.58 | 9,306 |
+| Not readmitted (0) | 0.64 | 0.71 | 0.67 | 10,496 |
+| Readmitted (1) | 0.63 | 0.54 | 0.58 | 9,306 |
 | Macro average | 0.63 | 0.63 | 0.63 | 19,802 |
 | Weighted average | 0.63 | 0.63 | 0.63 | 19,802 |
 
 Confusion matrix (rows = actual class; columns = predicted class):
 
-| | Predicted Not Readmitted | Predicted Readmitted |
-|---|---:|---:|
-| Actual Not Readmitted | 7,495 | 3,001 |
-| Actual Readmitted | 4,235 | 5,071 |
+```text
+[[7495, 3001],
+ [4235, 5071]]
+```
 
-## 11. Final comparison on the held-out test set
+The saved model was reloaded and its predictions were checked against the original predictions.
+
+Saved artefacts:
+- `carecontinuum_catboost_10features.cbm`
+- `model_metadata_10features.json`
+- `category_options_10features.json`
+- `numeric_stats.json`
+
+## 11. Comparison and final model-selection decision
 
 | Metric | 22-feature model | Tuned 10-feature model |
 |---|---:|---:|
-| Accuracy | 0.6369 | 0.6346 |
+| Test accuracy | 0.6369 | 0.6346 |
 | Readmitted-class F1 | 0.5846 | 0.5836 |
-| Readmitted-class precision | approximately 0.63 | 0.6282 |
-| Readmitted-class recall | approximately 0.54 | 0.5449 |
+| Readmitted-class recall | approximately 0.5437 | 0.5449 |
 | Number of input features | 22 | 10 |
 
-The 10-feature model's accuracy is 0.23 percentage points lower and its readmitted-class F1 is 0.10 percentage points lower. Its readmitted-class recall is 0.12 percentage points higher. The compact model correctly identified 5,071 readmitted encounters compared with 5,059 for the 22-feature model, while producing 3,001 false positives compared with 2,944.
+The 22-feature model has marginally higher test accuracy and F1. The 10-feature model has marginally higher readmitted-class recall and requires 12 fewer inputs.
 
-These differences are small. No statistical significance test or confidence interval has been calculated, so the results should not be described as proving that either model is statistically superior.
+The tuned 10-feature model was selected as the preferred application model because it provides a simpler user experience while retaining very similar held-out test performance. The 22-feature model is retained as a comparison and backup model.
 
-## 12. Final model-selection rationale
+This decision does not establish statistical superiority, and neither model has been clinically validated.
 
-The project selected the tuned 10-feature model as the preferred application model because it reduces the number of user-provided inputs from 22 to 10 while retaining very similar held-out test performance.
+## 12. Final 10-feature model feature importance
 
-This is a usability-versus-performance engineering decision:
-- The 22-feature model has marginally higher test accuracy and F1.
-- The 10-feature model has marginally higher readmitted-class recall and requires 12 fewer inputs.
-- The 10-feature model therefore offers a simpler user experience with only a very small observed reduction in accuracy and F1.
+| Feature | Importance |
+|---|---:|
+| `number_inpatient` | 24.913 |
+| `diag_1` | 12.616 |
+| `admission_source_id` | 9.974 |
+| `diag_2` | 9.382 |
+| `age` | 8.119 |
+| `admission_type_id` | 7.914 |
+| `number_diagnoses` | 7.560 |
+| `medical_specialty` | 6.734 |
+| `num_medications` | 6.525 |
+| `number_emergency` | 6.264 |
 
-The 22-feature model should be retained as a comparison/backup model. The selection does **not** establish that the 10-feature model is statistically better or clinically suitable.
+These are global model feature-importance scores, not causal effects or clinical risk estimates.
 
-**Final project decision:** Use the tuned 10-feature model as the preferred model for the CareContinuum AI demonstration application, while retaining the 22-feature model and this experiment record as evidence of the model-selection process.
+## 13. Application implementation
 
-## 13. Evidence trail and reproducibility notes
+The Streamlit application uses the compact 10-feature CatBoost model. It loads the saved model, metadata, category options, and numerical statistics. The interface accepts 10 inputs and displays estimated class probabilities and a threshold-based classification using a 0.50 threshold.
 
-The following outputs were recorded during the development process:
-1. Validation metrics for the 42-feature model.
-2. Validation metrics for the 22-feature model.
-3. Held-out test metrics and confusion matrix for the 22-feature model.
-4. The 10 selected candidate features and the feature-importance rationale.
-5. Validation metrics for the initial 10-feature model.
-6. The eight tested hyperparameter configurations, their best iterations, and validation metrics.
-7. The selected 10-feature configuration: depth 6, learning rate 0.05, L2 regularization 5, 484 iterations.
-8. Final 10-feature held-out test metrics and confusion matrix.
-9. The final comparison and rationale for preferring the compact model in the application.
+The app includes the model's held-out test metrics and an educational-use disclaimer. An individual prediction probability is a model output, not a diagnosis or a clinically validated risk estimate.
 
-For a reproducible submission, retain the notebook outputs, trained model files, metadata files, and this decision record together. The written record summarizes the results supplied during the experiment; the notebook remains the primary executable evidence.
+## 14. Limitations
 
+- The source data is historical (1999–2008).
+- The final binary target combines readmissions within 30 days and after 30 days.
+- The model has not undergone external or prospective validation.
+- The reported results represent one patient-grouped held-out test evaluation.
+- The Random Forest full 200-tree run did not complete; only a smaller exploratory experiment was recorded.
+- The three-class first-notebook metrics and binary CatBoost metrics concern different target definitions and should not be compared as if they were the same task.
+- Feature importance does not demonstrate causality.
+- This is an academic project, not a clinical decision-support system.
+
+## 15. References
+
+1. Clore, J., Cios, K., DeShazo, J., & Strack, B. (2014). *Diabetes 130-US Hospitals for Years 1999–2008*. UCI Machine Learning Repository. https://doi.org/10.24432/C5230J
+2. Strack, B., DeShazo, J. P., Gennings, C., Olmo, J. L., Ventura, S., Cios, K. J., & Clore, J. N. (2014). *Impact of HbA1c Measurement on Hospital Readmission Rates: Analysis of 70,000 Clinical Database Patient Records*. BioMed Research International, 2014, 781670. https://doi.org/10.1155/2014/781670
+3. Prokhorenkova, L., Gusev, G., Vorobev, A., Dorogush, A. V., & Gulin, A. (2018). *CatBoost: Unbiased Boosting with Categorical Features*. NeurIPS 31. https://proceedings.neurips.cc/paper/2018/hash/14491b756b3a51daac41c24863285549-Abstract.html
